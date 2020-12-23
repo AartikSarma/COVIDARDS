@@ -5,3 +5,9 @@ This CSV file corresponds to Table 1 in the manuscript. There are two key differ
 
 ## COVID vs ARDS.Rmd
 This R notebook can be used to reproduce the differential expression analysis and heatmaps in the manuscript. 
+
+## comet.genes.csv
+A matrix of gene counts for the subjects included in this study. This can also be found on GEO: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE163426
+
+## rnaseqfunctions.r
+Functions to facilitate analysis and visualization of RNASeq data
