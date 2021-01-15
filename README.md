@@ -13,5 +13,5 @@ This R notebook can be used to reproduce the differential expression analysis an
 Functions to facilitate analysis and visualization of RNASeq data.
 
 ## NP_TA_IFN_viral_load_regression.R
-This code performs robust regression of interferon stimulated gene expression against SARS-CoV-2 viral load in the tracheal aspirate (TA) samples reported in this study as compared to nasopharyngeal (NP) swab samples we previously reported.
+This code performs robust regression of interferon stimulated gene expression against SARS-CoV-2 viral load (rpm) in the tracheal aspirate (TA) samples reported in this study as compared to nasopharyngeal (NP) swab samples we [previously reported](https://doi.org/10.1038/s41467-020-19587-y).
 Also included in the repo are the NP swab gene counts & metadata and the interferon geneset we used.
