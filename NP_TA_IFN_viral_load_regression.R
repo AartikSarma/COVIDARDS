@@ -2,7 +2,6 @@ library(dplyr)
 library(tidyr)
 library(tibble)
 library(limma)
-library(ggeffects)
 library(robustbase)
 
 TA_counts_path <- "comet.genes.csv"
