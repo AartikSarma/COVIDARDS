@@ -109,7 +109,7 @@ NP_vwts <- voom(NP_counts_sub,
                 normalize.method="quantile",
                 plot=T)
 
-## Robust regression of IFN genes on viral load in TA samples
+## Robust regression of IFN genes on viral load in NP samples
 
 NP_rpm_gene_robs <- as.data.frame(t(sapply(ifn_geneset_id, function(g) {
   NP_swab_samples %>%
