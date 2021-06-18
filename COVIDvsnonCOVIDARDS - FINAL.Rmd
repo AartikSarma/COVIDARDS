@@ -1,0 +1,643 @@
+---
+title: "COMET differential expression"
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+  html_notebook:
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r knitrsetup, include=FALSE} 
+rm(list = ls())
+starttime <-Sys.time()
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+```{r options}
+#Use this section to set options
+working.directory <- "~/Documents/NatComms-COVIDARDS-final-code/"
+```
+
+```{r setup}
+setwd(working.directory)
+library(tidyverse)
+library(magrittr)
+library(DESeq2)
+library(BiocParallel)
+register(MulticoreParam(8))
+library(tableone)
+library(pheatmap)
+library(IHW)
+source("./rnaseqfunctions.r")
+```
+
+```{r themes}
+col.covid <- "firebrick3"
+col.noARDS <- "grey90"
+col.ards <- "mediumorchid3"
+col.viral <- "dodgerblue2"
+col.bacterial <- "springgreen3"
+
+ann_colors = list(
+  dx = c("ARDS" = col.ards, "COVID" = col.covid, "No ARDS" = col.noARDS, "Viral ARDS" = col.viral, "Bacterial ARDS" = col.bacterial)
+)
+
+heatmaprows <- 50
+```
+
+
+# Table 1
+```{r loaddata}
+exp1.genes <- read_csv("./comet.genes.csv")
+
+#Data frame to link ENSG ids with HGNC symbols
+ensembltohgnc <- exp1.genes %>% dplyr::select(ensembl_gene_id,gene_symbol) %>% dplyr::rename(hgnc_symbol = gene_symbol)
+
+exp1.genes %<>% column_to_rownames("ensembl_gene_id") %>% dplyr::select(-gene_symbol)
+
+exp1.samples <- read_csv("./covidards.metadata.csv")
+
+exp1.samples %<>%
+  mutate(dx = factor(dx, levels = c("COVID", "ARDS", "No ARDS"))) %>% #Set COVID as the reference value, so that all DESeq contrasts are with COVID
+  mutate(`Minimum PF Ratio` = as.numeric(`Minimum PF Ratio`)) 
+
+#Variables from metadata table to use for Table 1
+tab1vars <- c('Age', 'ARDS etiology', 'Gender', 'Race', 'Hispanic Ethnicity', '30-day mortality', 'LRTI Type', 'Minimum PF Ratio', 'apacheiii', 'pressors', 'symptomdays', "los")
+factorvars <- c("pressors")
+nonnormvars <- c("Minimum PF", "Age", "SymptomDays", "los", "hospitalday", "symptomdays", "mvday")
+
+#Calculate summary statistics for included COVID and OtherARDS subjects
+exp1.samples %>%
+  filter(dx %in% c("COVID", "ARDS")) %>%
+  mutate(dx = factor(dx, levels = c("COVID", "ARDS"))) %>%
+CreateTableOne(data = ., 
+                              strata ="dx",
+                              vars = tab1vars,factorVars = factorvars,
+                              test = T
+                              ) %>% print(nonnormal = nonnormvars)
+
+#Calculate summary statistics for included COVID and NoARDS subjects
+exp1.samples %>%
+  filter(dx %in% c("COVID", "No ARDS")) %>%
+  mutate(dx = factor(dx, levels = c("COVID", "No ARDS"))) %>%
+CreateTableOne(data = ., 
+                              strata ="dx",
+                              vars = tab1vars,factorVars = factorvars,
+                              test = T
+                              ) %>% print(nonnormal = nonnormvars)
+
+
+exp1.samples %<>%
+  dplyr::rename(
+    sampleid = `RNASeq ID`, 
+    lrtitype = `LRTI Type`
+  )
+```
+
+
+# Differential expression analysis
+## COVID-19 vs. other causes of ARDS
+```{r message=FALSE, warning=FALSE, include=FALSE}
+exp1.dds <- 
+  DESeqDataSetFromMatrix(
+    countData = exp1.genes,
+    colData = exp1.samples,
+    design = ~ dx
+  )
+
+exp1.dds <- DESeq(exp1.dds, parallel = T)
+
+#This function extracts the results for each contrast in a DESeq object and shrinks log2-fold changes using ashr or apeglm. In addition, the function uses the IHW package to calculate false detection rates. The results for each contrast are saved in an object in the global environment. The results are also exported as a CSV file in a subfolder of the active working directory. 
+deseqresults(exp1.dds, method = "ape.noadapt")
+```
+
+```{r}
+Supp1A <- exp1.ARDSvsCOVID.ape.noadapt %>% 
+  arrange(pvalue) %>%
+  dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
+  dplyr::rename(
+    "Name" = "hgnc_symbol",
+    "ENSEMBL ID" = "ensembl_gene_id",
+    "p value" = "pvalue",
+    "BH adjusted p value" = "ihwP"
+  ) 
+```
+
+```{r}
+Supp1B <- exp1.No.ARDSvsCOVID.ape.noadapt %>% 
+  arrange(pvalue) %>%
+  dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
+  dplyr::rename(
+    "Name" = "hgnc_symbol",
+    "ENSEMBL ID" = "ensembl_gene_id",
+    "p value" = "pvalue",
+    "BH adjusted p value" = "ihwP"
+  ) 
+
+```
+
+### S1A - DE genes from COVID vs. OtherARDS
+```{r}
+Supp1A
+```
+
+### S1B - DE genes from COVID vs. NoARDS
+```{r}
+Supp1B
+```
+
+## COVID-19 vs. bacterial or viral ARDS
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#Select the subjects with secondary analysis
+exp2.samples <- exp1.samples %>%
+  filter((dx == "ARDS" & (lrtitype== "Viral" | lrtitype == "Bacterial")) | #Subjects with viral or bacterial ARDS
+           (dx == "COVID" & lrtitype == "Viral")| #COVID subjects without co-infections
+           dx == "No ARDS") %>% #NoARDS controls
+  mutate(dx = case_when(
+    dx == "COVID" ~ "COVID", 
+    dx == "No ARDS" ~ "No ARDS",
+    lrtitype == "Viral" ~ "Viral ARDS", 
+    lrtitype == "Bacterial" ~ "Bacterial ARDS" 
+  )) %>%
+  mutate(dx = factor(dx, levels = c("COVID", "Bacterial ARDS", "Viral ARDS", "No ARDS"))) #Set COVID as the reference value, so that all DESeq contrasts are with COVID
+
+exp2.genes <- read_csv("./comet.genes.csv")
+exp2.genes %<>% column_to_rownames("ensembl_gene_id") %>% dplyr::select(-gene_symbol)
+
+exp2.genes %<>%
+  dplyr::select(one_of(exp2.samples$sampleid))
+
+exp2.dds <- 
+  DESeqDataSetFromMatrix(
+    countData = exp2.genes,
+    colData = exp2.samples,
+    design = ~ dx
+  )
+
+exp2.dds <- DESeq(exp2.dds, parallel = T)
+
+#This function extracts the results for each contrast in a DESeq object and shrinks log2-fold changes using ashr or apeglm. In addition, the function uses the IHW package to calculate false detection rates. The results for each contrast are saved in an object in the global environment. The results are also exported as a CSV file in a subfolder of the active working directory. 
+deseqresults(exp2.dds, methods = "ape.noadapt")
+
+Supp6A <- exp2.Viral.ARDSvsCOVID.ape.noadapt %>% 
+  dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
+  dplyr::rename(
+    "Name" = "hgnc_symbol",
+    "ENSEMBL ID" = "ensembl_gene_id",
+    "p value" = "pvalue",
+    "BH adjusted p value" = "ihwP"
+  ) 
+
+Supp6B <- exp2.Bacterial.ARDSvsCOVID.ape.noadapt %>% 
+  dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
+  dplyr::rename(
+    "Name" = "hgnc_symbol",
+    "ENSEMBL ID" = "ensembl_gene_id",
+    "p value" = "pvalue",
+    "BH adjusted p value" = "ihwP"
+  ) 
+
+```
+
+### S6 - DE genes from COVID vs. BacterialARDS
+```{r}
+Supp6A
+```
+
+### S6 - DE genes from COVID vs. ViralARDS
+```{r}
+Supp6B
+```
+
+
+# Heatmaps
+The following code generates the heatmaps used in Figure 1 and Figure 2. To generate high resolution figures, the height and width of every cell is set to 10. This generates heatmaps that can only be displayed in RStudio if the screen is rotated into portrait mode (or on a very high resolution screen). On smaller screens, RStudio will generate a truncated version of image. The images should display correctly if knit to an HTML file. Dendrograms can be rotated by changing the "rotate" option to TRUE. PDF versions of the dendrograms can be saved by uncommenting the dev.copy2pdf function. 
+
+## COVID-19 vs. all other causes of ARDS
+```{r,fig.height = 16, fig.width = 10}
+exp1.vst <- vst(exp1.dds, blind = TRUE)
+exp1.nm <- exp1.vst %>% assay 
+exp1.nm %<>% as.data.frame%>% rownames_to_column("ensembl_gene_id") %>% left_join(ensembltohgnc) %>% distinct(hgnc_symbol, .keep_all = T) %>% filter(hgnc_symbol != "") %>% column_to_rownames("hgnc_symbol") %>% dplyr::select(-ensembl_gene_id)
+
+ARDSvsCOVID.DEgenes <- 
+  exp1.ARDSvsCOVID.ape.noadapt %>%
+  filter(ihwP < 0.1, abs(log2FoldChange) > 0.5) %>% 
+  mutate(direction = sign(log2FoldChange)) %>%
+  group_by(direction) %>%
+  arrange(pvalue, .by_group = T) %>%
+  filter(row_number() <= heatmaprows) %>%
+  ungroup %>%
+  dplyr::select(hgnc_symbol) %>%
+  unlist
+
+ARDSvsCOVID.nm  <-  
+  exp1.nm %>%
+  filter(rownames(.) %in% ARDSvsCOVID.DEgenes) %>%
+  t %>%
+  as.data.frame %>%
+  scale
+
+exp1.breaks <- quantile_breaks(ARDSvsCOVID.nm %>% t)
+exp1.annotation <- exp1.samples %>%
+  dplyr::select(sampleid, dx) %>%
+  column_to_rownames("sampleid")
+
+pheatmap.rotate(
+  ARDSvsCOVID.nm %>% t,
+  show_rownames = T,
+  show_colnames = F,
+  scale = "row",
+  cutree_rows = 2,
+  cutree_cols = 1,
+  border_color = NA,
+  breaks = exp1.breaks,
+  color = viridis(9),
+  fontsize_col = 10,
+  fontsize_row = 8,
+  cluster_rows = T,
+  cluster_col = T,
+  treeheight_row = 20,
+  treeheight_col = 20,
+  annotation_legend = TRUE,
+  annotation_colors = ann_colors,
+  annotation_col = exp1.annotation,
+  clustering_distance_cols = "euclidean",
+  clustering_distance_rows = "manhattan",
+  uselastdend = F,
+  rotate = F, #Change to true to rotate the dendrogram
+  cellwidth = 10,
+  cellheight = 10
+  )
+
+#Uncomment to save a file to PDF
+#dev.copy2pdf(file = "COVIDvsARDSheatmap.pdf", height = 20, width = 10)
+
+```
+
+## COVID-19 vs. bacterial ARDS
+```{r}
+exp2.vst <- vst(exp2.dds, blind = TRUE)
+exp2.nm <- exp2.vst %>% assay 
+exp2.nm %<>% as.data.frame%>% rownames_to_column("ensembl_gene_id") %>% left_join(ensembltohgnc) %>% distinct(hgnc_symbol, .keep_all = T) %>% filter(hgnc_symbol != "") %>% column_to_rownames("hgnc_symbol") %>% dplyr::select(-ensembl_gene_id)
+```
+
+
+```{r, fig.height = 16, fig.width = 10}
+Bacterial.ARDSvsCOVID.DEgenes <- exp2.Bacterial.ARDSvsCOVID.ape.noadapt %>%
+  filter(ihwP < 0.1, abs(log2FoldChange) > 0.5) %>% 
+  mutate(direction = sign(log2FoldChange)) %>%
+  group_by(direction) %>%
+  arrange(pvalue, .by_group = T) %>%
+  filter(row_number() <= heatmaprows) %>%
+  ungroup %>%
+  dplyr::select(hgnc_symbol) %>%
+  unlist
+
+Bacterial.ARDSvsCOVID.samples <- 
+  exp2.samples %>%
+  filter(dx %in% c("COVID", "Bacterial ARDS")) %>% 
+  dplyr::select(sampleid) %>%
+  unlist
+
+Bacterial.ARDSvsCOVID.nm  <- 
+  exp2.nm %>%
+  filter(rownames(.) %in% Bacterial.ARDSvsCOVID.DEgenes) %>%
+  t %>%
+  as.data.frame %>% 
+  filter(rownames(.) %in% Bacterial.ARDSvsCOVID.samples) %>%
+  scale
+
+exp2.breaks <- quantile_breaks(Bacterial.ARDSvsCOVID.nm %>% t)
+exp2.annotation <- exp2.samples %>%
+  dplyr::select(sampleid, dx) %>%
+  column_to_rownames("sampleid")
+
+pheatmap.rotate(
+  Bacterial.ARDSvsCOVID.nm %>% t,
+  show_rownames = T,
+  show_colnames = F,
+  scale = "row",
+  cutree_rows = 2,
+  cutree_cols = 1,
+  border_color = NA,
+  breaks = exp2.breaks,
+  color = viridis(9),
+  fontsize_col = 10,
+  fontsize_row = 8,
+  cluster_rows = T,
+  cluster_col = T,
+  treeheight_row = 20,
+  treeheight_col = 20,
+  annotation_legend = TRUE,
+  annotation_colors = ann_colors,
+  annotation_col = exp2.annotation,
+  clustering_distance_cols = "euclidean",
+  clustering_distance_rows = "manhattan",
+  uselastdend = F,
+  rotate = F, #Change to T to rotate dendrogram
+  cellwidth = 10,
+  cellheight = 10
+  )
+
+#Uncomment to save to PDF
+#dev.copy2pdf(file = "COVIDvsBacteria-heatmap.pdf", height = 20, width = 10 )
+
+```
+
+## COVID-19 vs. viral ARDS
+```{r, fig.height = 16, fig.width = 10}
+Viral.ARDSvsCOVID.DEgenes <- 
+  exp2.Viral.ARDSvsCOVID.ape.noadapt %>%
+  filter(ihwP < 0.1, abs(log2FoldChange) > 0.5) %>% 
+  mutate(direction = sign(log2FoldChange)) %>%
+  group_by(direction) %>%
+  arrange(pvalue, .by_group = T) %>%
+  filter(row_number() <= heatmaprows) %>%
+  ungroup %>%
+  dplyr::select(hgnc_symbol) %>%
+  unlist
+
+Viral.ARDSvsCOVID.samples <- 
+  exp2.samples %>%
+  filter(dx %in% c("COVID", "Viral ARDS")) %>% 
+  dplyr::select(sampleid) %>%
+  unlist
+
+Viral.ARDSvsCOVID.nm  <- 
+  exp2.nm %>%
+  filter(rownames(.) %in% Viral.ARDSvsCOVID.DEgenes) %>%
+  t %>%
+  as.data.frame %>% 
+  filter(rownames(.) %in% Viral.ARDSvsCOVID.samples) %>%
+  scale
+
+pheatmap.rotate(
+  Viral.ARDSvsCOVID.nm %>% t,
+  show_rownames = T,
+  show_colnames = F,
+  scale = "row",
+  cutree_rows = 2,
+  cutree_cols = 1,
+  border_color = NA,
+  breaks = exp2.breaks,
+  color = viridis(9),
+  fontsize_col = 10,
+  fontsize_row = 8,
+  cluster_rows = T,
+  cluster_col = T,
+  treeheight_row = 20,
+  treeheight_col = 20,
+  annotation_legend = TRUE,
+  annotation_colors = ann_colors,
+  annotation_col = exp2.annotation,
+  clustering_distance_cols = "euclidean",
+  clustering_distance_rows = "manhattan",
+  uselastdend = F,
+  rotate = F, #Change to T to rotate dendrogram 
+  cellwidth = 10,
+  cellheight = 10
+  )
+
+#Uncomment to save the file to PDF
+#dev.copy2pdf(file = "COVIDvsVirus-heatmap.pdf", height = 20,width = 10)
+
+```
+
+# PCA plots
+The following code generates PCA plots of VST-transformed gene expression. The 500 genes with the highest variance are used for this analysis.  
+
+## COVID-19 vs. all other causes of ARDS
+```{r}
+library(ggrepel)
+exp1.vst <- vst(exp1.dds)
+exp2.vst <- vst(exp2.dds)
+
+plotPCA(exp1.vst, intgroup = "dx") + theme_classic() + coord_flip() + theme(legend.title = element_blank(), axis.line = element_line(size = 1), axis.text = element_text(size = 14), axis.title = element_text(size = 14), legend.text = element_text(size =12)) + scale_color_manual(values = c("firebrick3", "darkorchid4", "grey60"))
+
+#Uncomment to save the file to PDF
+#dev.copy2pdf(file = "PCA - all subjects.pdf", width = 10, height = 10)
+```
+
+## COVID-19 vs. bacterial and viral ARDS
+```{r}
+plotPCA(exp2.vst, intgroup = "dx") + theme_classic() + coord_flip() + theme(legend.title = element_blank(), axis.line = element_line(size = 1), axis.text = element_text(size = 14), axis.title = element_text(size = 14), legend.text = element_text(size =12)) + scale_color_manual(values = c("firebrick3", "green3", "steelblue1", "grey60"))
+
+#Uncomment to save the file to PDF
+#dev.copy2pdf(file = "PCA-subgroups.pdf", width = 10, height = 10)
+
+```
+
+# S9 - Comparisons to previously published datasets
+## NEJM - Autopsy series
+```{r}
+nejm.covid.angio.up <- 
+  c( "ADAM8", "AGT", "ALDOA", "ANXA2P2", "BMP7", "C3AR1", "CCBE1", "CDC42", "CLIC4", "COL18A1",
+     "COL3A1", "COL5A1", "CTNNB1", "CXCL13", "CXCL8", "ECSCR", "EIK2AK3", "FGF2", "FLT1", "FN1", "GPR56", "ITGA2", "ITGA5", "ITGB1", "ITGB8", "MAP2K1", "MAP3K7", "MAPK1", "MED1", "MTDH", "NCL", "NF1", "PDCD10", "PDGFA", "PIK3CA", "PPP3R1", "PTEN", "QKI", "RAF1", "RBPJ", "ROCK1", "ROCK2", "RTN4", "S1PR1", "SERPINE1", "SERPINF1", "SERPING1", "SNAI1", "SPARC", "SRGN", "SRPK2", "SULF1", "TFPI2", "TGFBR2", "THBS1", "THBS2", "TNFRSF12A", "VEGFC",
+     "AAMP", "ADAM15", "AKT1", "ANGPTL4", "ATPIF1", "CEACAM1", "COL1A1", "COL1A2", "COL4A2", "CXCL10", "CYP1B1", "ECM1", "GPI1", "GREM1", "HGF", "HIF1A", "HMOX1", "HRAS", "HSPB1", "IGF1", "IL6", "KRAS", "MAP2K2", "MMP14", "MMP2", "NOS3", "NRCAM","NRP1", "NRP2", "PDCL3", "PLAU", "RUNX1", "STAT1", "THY1", "TIMP1", "TNFRSF1A", "TYMP", "VCAM1", "VEGFA", "VHL", "WARS")
+
+nejm.covid.angio.down <-
+  c("EPHA1", "EPHB2", "ERBB2", "NR4A1", "NRXN1", "NRXN3", "PLA2G2D", "PLXDC1", "TAL1", "WNT5A", "APOH", "FGFR2", "PPP1R16B")
+
+nejm.covid.inflam.down <- c('ALOX5', 'C1QB', 'C5', 'C8B', 'CCL17', 'CCL24', 'CD40LG', 'CD55', 'CD86', 'CDC42', 'CREB1', 'CYSLTR2', 'DAXX', 'GNAQ', 'GNAS', 'HDAC4', 'HLA-DRA', 'HMGB1', 'IL18', 'IRF5', 'KEAP1', 'LTB4R2', 'MAP2K4', 'MAP3K1', 'MAP3K7', 'MAP3K9', 'MAPKAPK5', 'MEF2C', 'MEF2S', 'MRC1', 'NFATC3', 'NFE2L2', 'NR3C1', 'PRKCA', 'PTGFR', 'PTGS1', 'PTK2', 'RAPGEF2', 'RHOA', 'RIPK1', 'ROCK2', 'RPS6KA5', 'TGFBR1', 'TLR1', 'TLR4', 'TLR5', 'TOLLIP', 'BIRC2', 'GNB1', 'IL6R', 'MAPK8', 'PPP1R12B', 'RAC1', 'RAF1')
+
+nejm.covid.inflam.up <- c('CCL2', 'CCL20', 'CCL7', 'CCL8', 'CCR1', 'CFL1', 'CSF1', 'CXCL10', 'DDIT3', 'HIF1A', 'IFIT3', 'IL1R1', 'IL1RN', 'IL6', 'CXCL8', 'MX1', 'TNFAIP3')
+
+nejm.up <- exp1.No.ARDSvsCOVID.ape.noadapt %>%
+  filter((hgnc_symbol %in% nejm.covid.inflam.up & log2FoldChange < 0)|
+        (hgnc_symbol %in% nejm.covid.angio.up & log2FoldChange < 0)) %>%
+  filter(ihwP < 0.1) %>% dplyr::select(hgnc_symbol) %>% unlist %>% sort
+
+nejm.down <- exp1.No.ARDSvsCOVID.ape.noadapt %>%
+  filter((hgnc_symbol %in% nejm.covid.inflam.down& log2FoldChange > 0) |
+        (hgnc_symbol %in% nejm.covid.angio.down& log2FoldChange > 0)) %>%
+  filter(ihwP < 0.1) %>% dplyr::select(hgnc_symbol) %>% unlist %>% sort
+
+Supp9A <- cbind(nejm.up, c(nejm.down, rep("", length(nejm.up)- length(nejm.down)))) %>%
+  as.data.frame %>%
+  dplyr::rename("Up in COVID" = 1, "Down in COVID" = 2)
+Supp9A
+```
+
+
+## Cell - Rhesus macaque model
+```{r include=FALSE}
+macaque <- read_tsv("./externaldatasets/macaque.txt")
+
+macaque.counts <- macaque %>%
+  column_to_rownames("GeneSymbol") %>%
+  dplyr::select(matches("Baseline")|matches("d2_BAL"))
+
+macaque.col <- colnames(macaque.counts) %>%
+  enframe %>%
+  dplyr::select(-name) %>%
+  mutate(time = str_remove(value, "_BAL"), 
+         time = str_remove_all(time, ".+_")) %>%
+  column_to_rownames("value") 
+
+macaque.dds <- DESeqDataSetFromMatrix(
+  countData = macaque.counts,
+  colData = macaque.col, 
+  design = ~time
+)
+
+macaque.dds <- DESeq(macaque.dds)
+deseqresults(macaque.dds, methods = "ape.noadapt")
+
+macaque.up <- macaque.d2vsBaseline.ape.noadapt %>% filter(ihwP < 0.1, log2FoldChange > 0) %>% arrange(ihwP) %>% 
+  dplyr::select(ensembl_gene_id) %>% filter(ensembl_gene_id %in% exp1.No.ARDSvsCOVID.ape.noadapt$hgnc_symbol) %>% unlist
+
+macaque.down <- macaque.d2vsBaseline.ape.noadapt %>% filter(ihwP < 0.1, log2FoldChange < 0) %>% arrange(ihwP) %>% 
+  dplyr::select(ensembl_gene_id) %>% filter(ensembl_gene_id %in% exp1.No.ARDSvsCOVID.ape.noadapt$hgnc_symbol) %>% unlist
+
+
+exp1.macaque.overlap <- exp1.No.ARDSvsCOVID.ape.noadapt %>%
+  filter((hgnc_symbol %in% macaque.up & log2FoldChange < 0 & ihwP < 0.1) | 
+          (hgnc_symbol %in% macaque.down & log2FoldChange > 0& ihwP < 0.1))
+```
+
+```{r}
+Supp9C <- exp1.macaque.overlap%>%
+  filter(ihwP < 0.1) %>%
+  mutate(log2FoldChange = -log2FoldChange) %>%
+  dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
+  dplyr::rename("human.l2f" = "log2FoldChange") %>%
+  left_join(
+    macaque.d2vsBaseline.ape.noadapt %>%
+      dplyr::select(ensembl_gene_id, log2FoldChange) %>%
+      dplyr::rename("hgnc_symbol" = "ensembl_gene_id")
+    ) %>%
+  dplyr::select("hgnc_symbol", "log2FoldChange","human.l2f") %>%
+  dplyr::rename(
+    "Symbol" = "hgnc_symbol",
+    "macaque.l2f" = "log2FoldChange"
+  ) %>% arrange(desc(human.l2f))
+
+Supp9C
+```
+
+## Nature - BAL macrophages
+### COVID vs. Non-pneuomnia controls
+```{r nw.bal, include=FALSE}
+nw.metadata <- read_csv("./externaldatasets/nwbal.subjects.csv")
+nw.genes <- read_csv("./externaldatasets/nwbal.genes.csv")
+nw.genes %<>% filter(ensembl_gene_id %in% rownames(exp1.genes)) %>% column_to_rownames("ensembl_gene_id")  
+nwbal.metadata <- nw.metadata %>%
+  filter(days_from_first_intubation <= 5, 
+         superinfection != "Superinfection" | is.na(superinfection))
+
+
+nwbal.genes <- 
+  nw.genes %>% 
+  dplyr::select(one_of(nwbal.metadata$sample))
+
+
+nwbal.dds <- 
+  DESeqDataSetFromMatrix(
+    countData = nwbal.genes,
+    colData = nwbal.metadata,
+    design = ~diagnosis
+  )
+
+nwbal.dds <- DESeq(nwbal.dds, parallel = T)
+
+deseqresults(nwbal.dds, methods = "ape.noadapt")
+
+#Identify overlapping gene sets
+nw.control.up <- nwbal.Non.Pneumonia.ControlvsCOVID.19.ape.noadapt %>%
+  filter(ihwP < 0.1, log2FoldChange < -0.5) %>% dplyr::select("hgnc_symbol") %>% unlist
+nw.control.down <- nwbal.Non.Pneumonia.ControlvsCOVID.19.ape.noadapt %>%
+  filter(ihwP < 0.1, log2FoldChange > 0.5) %>% dplyr::select("hgnc_symbol") %>% unlist
+
+#Bacterial
+nw.bact.up <- nwbal.Other.PneumoniavsCOVID.19.ape.noadapt %>%
+  filter(ihwP < 0.1, log2FoldChange < -0.5) %>% dplyr::select("hgnc_symbol") %>% unlist
+nw.bact.down <- nwbal.Other.PneumoniavsCOVID.19.ape.noadapt %>%
+  filter(ihwP < 0.1, log2FoldChange > 0.5) %>% dplyr::select("hgnc_symbol") %>% unlist
+
+bact.upinTAandBAL <- exp2.Bacterial.ARDSvsCOVID.ape.noadapt %>%
+  filter(hgnc_symbol %in% nw.bact.up & ihwP < 0.1 & log2FoldChange < -0.5) %>% dplyr::select(hgnc_symbol) %>% unlist
+bact.downinTAandBAL <-exp2.Bacterial.ARDSvsCOVID.ape.noadapt %>%
+  filter(hgnc_symbol %in% nw.bact.down & ihwP < 0.1 & log2FoldChange > 0.5) %>% dplyr::select(hgnc_symbol)%>% unlist
+```
+
+```{r}
+Supp9E <- exp1.No.ARDSvsCOVID.ape.noadapt %>%
+  filter(ihwP < 0.1) %>%
+  mutate(log2FoldChange = -log2FoldChange) %>%
+  dplyr::select(hgnc_symbol, log2FoldChange) %>%
+  dplyr::rename(`TA fluid`= log2FoldChange)%>%
+  left_join(nwbal.Non.Pneumonia.ControlvsCOVID.19.ape.noadapt %>%
+              filter(ihwP < 0.1) %>%
+              mutate(log2FoldChange = -log2FoldChange) %>%
+              dplyr::select(hgnc_symbol, log2FoldChange) %>%
+              dplyr::rename(`BAL fluid`  = log2FoldChange)
+              )%>%
+  filter(!is.na(`BAL fluid`), sign(`BAL fluid`) == sign(`TA fluid`)) %>% 
+  arrange(desc(`TA fluid`))
+
+Supp9E
+```
+
+### COVID vs. Bacterial pneumonia
+```{r}
+Supp9G <- exp2.Bacterial.ARDSvsCOVID.ape.noadapt %>%
+  filter(ihwP < 0.1) %>%
+  mutate(log2FoldChange = -log2FoldChange) %>%
+  dplyr::select(hgnc_symbol, log2FoldChange) %>%
+  dplyr::rename(`TA fluid` = log2FoldChange)%>%
+  left_join(nwbal.Other.PneumoniavsCOVID.19.ape.noadapt %>%
+              filter(ihwP < 0.1) %>%
+              mutate(log2FoldChange = -log2FoldChange) %>%
+              dplyr::select(hgnc_symbol, log2FoldChange) %>%
+              dplyr::rename(`BAL fluid` = log2FoldChange)
+              ) %>%
+  filter(!is.na(`BAL fluid`), sign(`BAL fluid`) == sign(`TA fluid`)) %>% 
+  arrange(desc(`TA fluid`))
+
+Supp9G
+```
+
+
+```{r supptables, eval=FALSE, include=FALSE}
+#Change to eval = TRUE to save the supplementary tables to an Excel file
+library(writexl)
+dir.create("SuppTables")
+
+Supp1 <- list(Supp1A, Supp1B)
+names(Supp1) <- c("S1A-OtherARDS vs COVID", "S1B-NoARDS vs COVID" )
+write_xlsx(Supp1, path = "./SuppTables/Supplementary_Data_1.xlsx" )
+
+#Supplementary Table 6
+Supp6 <- list(Supp6A, Supp6B)
+names(Supp6) <- c("S6A-ViralARDS vs COVID","S6B-BacterialARDS vs COVID")
+write_xlsx(Supp6, path = "./SuppTables/Supplementary_Data_6.xlsx" )
+
+#Supplementary table 9
+Supp9 <- list(Supp9A, Supp9C, Supp9E, Supp9G)
+names(Supp9) <- c("S9A","S9C", "S9E", "S9G")
+write_xlsx(Supp9, path = "./SuppTables/Supplementary_Data_9.xlsx" )
+```
+
+
+```{r}
+stoptime <- Sys.time()
+timeelapsed <- stoptime - starttime 
+```
+
+This file took ```r timeelapsed %>% round(2)``` minutes to knit. 
+
+
+
+
+
+
+
+
+
+
