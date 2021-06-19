@@ -78,6 +78,8 @@ deseqresults <- function(dds, #A DESeq object
 #### Heatmap functions ####
 ###########################
 
+#sort_hclust and quantile_breaks from https://slowkow.com/notes/pheatmap-tutorial/
+
 sort_hclust <- function(...) as.hclust(dendsort(as.dendrogram(...)))
 
 #Create a vector of deciles of gene expression
