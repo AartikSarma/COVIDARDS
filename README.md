@@ -16,5 +16,5 @@ Functions to facilitate analysis and visualization of RNASeq data.
 This code performs robust regression of interferon (IFN) stimulated gene expression against SARS-CoV-2 viral load (rpm) in the tracheal aspirate (TA) samples reported in this study as compared to nasopharyngeal (NP) swab samples we [previously reported](https://doi.org/10.1038/s41467-020-19587-y).
 Also included in the repo are the NP swab gene counts & metadata and the interferon gene set used.
 
-## SingleCell_COVIDARDS_Data_Ingest_QC_Clean.ipynb
-This code ingests all single cell data used in the ARDS study. This data was generated using the 5' 10x Single Cell V(D)Jv1.1 method. Data was ingested, QC'd, Batch Corrected and Annotated using the Scanpy pipeline https://scanpy.readthedocs.io/en/stable/. Cell type composition was also analyzed within the ARDS cohort. This code includes two separate analyses one with all patients and another focusing only within COVID positive individuals. 
+## SingleCell_COVIDARDS_Data_Ingest_QC_Annotated.ipynb
+This code ingests all single cell data used in the ARDS study. This data was generated using the 5' 10x Single Cell V(D)Jv1.1 method. Data was ingested, QC'd, Batch Corrected using Harmony https://github.com/immunogenomics/harmony and Annotated using the Scanpy pipeline https://scanpy.readthedocs.io/en/stable/. Cell type composition was also analyzed within COVID19 patients within the ARDS cohort. 
