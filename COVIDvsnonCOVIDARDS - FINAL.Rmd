@@ -120,6 +120,7 @@ deseqresults(exp1.dds, method = "ape.noadapt")
 ```{r}
 Supp1A <- exp1.ARDSvsCOVID.ape.noadapt %>% 
   arrange(pvalue) %>%
+  mutate(log2FoldChange = -log2FoldChange) %>%
   dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
   dplyr::rename(
     "Name" = "hgnc_symbol",
@@ -132,6 +133,7 @@ Supp1A <- exp1.ARDSvsCOVID.ape.noadapt %>%
 ```{r}
 Supp1B <- exp1.No.ARDSvsCOVID.ape.noadapt %>% 
   arrange(pvalue) %>%
+  mutate(log2FoldChange = -log2FoldChange) %>%
   dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
   dplyr::rename(
     "Name" = "hgnc_symbol",
@@ -186,6 +188,7 @@ exp2.dds <- DESeq(exp2.dds, parallel = T)
 deseqresults(exp2.dds, methods = "ape.noadapt")
 
 Supp6A <- exp2.Viral.ARDSvsCOVID.ape.noadapt %>% 
+  mutate(log2FoldChange = -log2FoldChange) %>%
   dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
   dplyr::rename(
     "Name" = "hgnc_symbol",
@@ -195,6 +198,7 @@ Supp6A <- exp2.Viral.ARDSvsCOVID.ape.noadapt %>%
   ) 
 
 Supp6B <- exp2.Bacterial.ARDSvsCOVID.ape.noadapt %>% 
+  mutate(log2FoldChange = -log2FoldChange) %>%
   dplyr::select("hgnc_symbol", "ensembl_gene_id", "log2FoldChange", "pvalue", "ihwP") %>%
   dplyr::rename(
     "Name" = "hgnc_symbol",
